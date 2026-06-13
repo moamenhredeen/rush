@@ -1,3 +1,4 @@
+pub mod archive;
 mod ast;
 mod commands;
 pub mod completion;

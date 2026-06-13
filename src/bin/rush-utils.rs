@@ -24,7 +24,9 @@ fn main() {
         "sort" => uu_sort::uumain(utility_args),
         "touch" => uu_touch::uumain(utility_args),
         "uniq" => uu_uniq::uumain(utility_args),
+        "unzip" => rush::archive::unzip_main(utility_args),
         "wc" => uu_wc::uumain(utility_args),
+        "zip" => rush::archive::zip_main(utility_args),
         _ => {
             eprintln!("rush-utils: {name}: utility is not bundled");
             127
