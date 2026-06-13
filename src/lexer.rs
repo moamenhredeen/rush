@@ -190,10 +190,10 @@ fn word(chars: &[char], offsets: &[usize], mut index: usize) -> Result<(Word, us
                 index += 1;
             }
             '\\' => {
-                let escape_start = index;
                 index += 1;
                 if index == chars.len() {
-                    return Err(Diagnostic::new(offsets[escape_start], "trailing escape"));
+                    plain.push('\\');
+                    break;
                 }
                 let escaped = chars[index];
                 if !escaped.is_whitespace()
@@ -310,5 +310,14 @@ mod tests {
             panic!()
         };
         assert_eq!(word.parts[0].text, r"C:\Projects\rush");
+    }
+
+    #[test]
+    fn preserves_trailing_path_backslash() {
+        let tokens = lex(r"cd target\release\").unwrap();
+        let Token::Word(word) = &tokens[1] else {
+            panic!()
+        };
+        assert_eq!(word.parts[0].text, r"target\release\");
     }
 }
