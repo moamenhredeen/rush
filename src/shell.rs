@@ -367,11 +367,9 @@ fn spawn_pipeline(commands: Vec<ExpandedCommand>, background: bool) -> io::Resul
         if command.argv.is_empty() {
             return Err(io::Error::other("empty command in pipeline"));
         }
-        let (program, bundled) = command_program(&command.argv[0])?;
-        let mut process = ProcessCommand::new(program);
-        if bundled {
-            process.arg(&command.argv[0]);
-        }
+        let resolved = command_program(&command.argv[0])?;
+        let mut process = ProcessCommand::new(resolved.program);
+        process.args(&resolved.prelude);
         process.args(&command.argv[1..]);
         process.envs(command.assignments);
         group.configure(&mut process);
@@ -633,29 +631,109 @@ fn is_stateful_builtin(name: &str) -> bool {
     BUILTINS.contains(&name)
 }
 
-fn command_program(name: &str) -> io::Result<(std::path::PathBuf, bool)> {
+struct ResolvedCommand {
+    program: std::path::PathBuf,
+    prelude: Vec<OsString>,
+}
+
+impl ResolvedCommand {
+    fn plain(program: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            program: program.into(),
+            prelude: Vec::new(),
+        }
+    }
+}
+
+fn command_program(name: &str) -> io::Result<ResolvedCommand> {
     let is_explicit = Path::new(name).is_absolute()
         || name.contains(std::path::MAIN_SEPARATOR)
         || (cfg!(windows) && name.contains('/'));
-    if is_explicit || !BUNDLED.contains(&name) {
-        return Ok((name.into(), false));
+    if !is_explicit && BUNDLED.contains(&name) {
+        let mut companion = env::current_exe()?;
+        companion.set_file_name(if cfg!(windows) {
+            "rush-utils.exe"
+        } else {
+            "rush-utils"
+        });
+        if !companion.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "bundled utility companion is missing: {}",
+                    companion.display()
+                ),
+            ));
+        }
+        return Ok(ResolvedCommand {
+            program: companion,
+            prelude: vec![OsString::from(name)],
+        });
     }
-    let mut companion = env::current_exe()?;
-    companion.set_file_name(if cfg!(windows) {
-        "rush-utils.exe"
+    #[cfg(windows)]
+    if !is_explicit && let Some(resolved) = resolve_windows_command(name) {
+        return Ok(resolved);
+    }
+    Ok(ResolvedCommand::plain(name))
+}
+
+/// Resolve a bare command name against PATH and PATHEXT, since Windows only
+/// auto-appends `.exe` when spawning — `.com`/`.bat`/`.cmd` are missed.
+/// `.bat`/`.cmd` are dispatched through `cmd /c` because they are not
+/// executable images.
+#[cfg(windows)]
+fn resolve_windows_command(name: &str) -> Option<ResolvedCommand> {
+    let extensions = path_extensions();
+    let already_has_extension = Path::new(name)
+        .extension()
+        .is_some_and(|extension| extensions.iter().any(|known| known.eq_ignore_ascii_case(&format!(".{}", extension.to_string_lossy()))));
+    let path = env::var_os("PATH")?;
+    for directory in env::split_paths(&path) {
+        if already_has_extension {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return Some(wrap_windows_command(candidate));
+            }
+        }
+        for extension in &extensions {
+            let candidate = directory.join(format!("{name}{extension}"));
+            if candidate.is_file() {
+                return Some(wrap_windows_command(candidate));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn wrap_windows_command(path: std::path::PathBuf) -> ResolvedCommand {
+    let is_script = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("bat") || extension.eq_ignore_ascii_case("cmd"));
+    if is_script {
+        ResolvedCommand {
+            program: "cmd.exe".into(),
+            prelude: vec![OsString::from("/c"), path.into_os_string()],
+        }
     } else {
-        "rush-utils"
-    });
-    if !companion.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "bundled utility companion is missing: {}",
-                companion.display()
-            ),
-        ));
+        ResolvedCommand::plain(path)
     }
-    Ok((companion, true))
+}
+
+#[cfg(windows)]
+fn path_extensions() -> Vec<String> {
+    env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+        .split(';')
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| {
+            if extension.starts_with('.') {
+                extension.to_owned()
+            } else {
+                format!(".{extension}")
+            }
+        })
+        .collect()
 }
 
 fn command_error_status(error: &io::Error) -> i32 {
