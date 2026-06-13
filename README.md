@@ -140,14 +140,33 @@ tar -czf backup.tar.gz src/
 
 RUSH is currently in early development.
 
-The initial focus is on:
+The first implementation currently supports:
 
-- Command parsing
-- Process execution
-- Pipes and redirection
-- Built-in commands
-- Cross-platform abstractions
-- GNU-compatible tooling
+- Interactive input with line editing and persistent history
+- `rush -c "command"` and UTF-8 script files
+- External commands, concurrent pipelines, and exit statuses
+- Single and double quotes, escapes, environment expansion, globbing, and `$(...)`
+- `&&`, `||`, `;`, and background execution with `&`
+- `<`, `>`, `>>`, `2>`, `2>>`, and `2>&1`
+- Stateful `cd`, `exit`, `jobs`, and `fg` built-ins
+- A bundled uutils-based command set through the `rush-utils` companion binary
+
+The bundled command set is currently:
+
+```text
+cat cp echo ls mkdir mv pwd rm sort touch uniq wc
+```
+
+Build both binaries before running from the repository:
+
+```sh
+cargo build --bins
+target/debug/rush
+```
+
+Background jobs use a portable subset of traditional shell job control. `&`,
+`jobs`, and `fg` are available, but stopped jobs, `bg`, Ctrl-Z suspension, and
+interactive terminal handoff are not implemented yet.
 
 ## Vision
 
