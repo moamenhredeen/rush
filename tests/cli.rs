@@ -84,6 +84,67 @@ fn fg_returns_completed_job_failure_status() {
     );
 }
 
+#[test]
+fn standalone_assignment_persists() {
+    let output = rush("RUSH_ASSIGN=one; echo \"$RUSH_ASSIGN\"");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "one\n");
+}
+
+#[test]
+fn quoted_assignment_value_is_not_split() {
+    let output = rush("RUSH_ASSIGN=\"two words\"; echo \"$RUSH_ASSIGN\"");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "two words\n");
+}
+
+#[test]
+fn command_assignment_is_temporary() {
+    let rush_binary = env!("CARGO_BIN_EXE_rush");
+    let source = format!(
+        "RUSH_ASSIGN=outer; RUSH_ASSIGN=inner \"{rush_binary}\" -c 'echo \"$RUSH_ASSIGN\"'; echo \"$RUSH_ASSIGN\""
+    );
+    let output = rush(&source);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "inner\nouter\n");
+}
+
+#[test]
+fn multiple_command_assignments_are_applied() {
+    let rush_binary = env!("CARGO_BIN_EXE_rush");
+    let source = format!(
+        "RUSH_FIRST=one RUSH_SECOND=\"two words\" \"{rush_binary}\" -c 'echo \"$RUSH_FIRST/$RUSH_SECOND\"'"
+    );
+    let output = rush(&source);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "one/two words\n");
+}
+
+#[test]
+fn assignment_applies_temporarily_to_stateful_builtin() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!("rush-home-{unique}"));
+    fs::create_dir(&directory).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_rush"))
+        .args(["-c", "HOME=\"$RUSH_TEST_HOME\" cd; pwd"])
+        .env("RUSH_TEST_HOME", &directory)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let actual = fs::canonicalize(String::from_utf8_lossy(&output.stdout).trim()).unwrap();
+    assert_eq!(actual, fs::canonicalize(&directory).unwrap());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn invalid_assignment_name_is_a_command() {
+    let output = rush("1RUSH_ASSIGN=value");
+    assert_eq!(output.status.code(), Some(127));
+}
+
 #[cfg(unix)]
 #[test]
 fn forwards_sigint_to_foreground_pipeline() {

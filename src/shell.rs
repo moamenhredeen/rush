@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::Path;
@@ -112,14 +113,15 @@ impl Shell {
             }
         };
         if expanded.len() == 1 && !background {
-            if let Some(status) = self.run_builtin(&expanded[0]) {
-                return status;
-            }
             if expanded[0].argv.is_empty() {
                 for (name, value) in &expanded[0].assignments {
                     unsafe { env::set_var(name, value) };
                 }
                 return 0;
+            }
+            let _environment = EnvironmentGuard::apply(&expanded[0].assignments);
+            if let Some(status) = self.run_builtin(&expanded[0]) {
+                return status;
             }
         }
         if expanded.iter().any(|command| {
@@ -165,16 +167,22 @@ impl Shell {
     }
 
     fn expand_command(&mut self, command: &crate::ast::Command) -> Result<ExpandedCommand, String> {
+        let mut words = command.words.iter();
+        let mut assignments = Vec::new();
+        let mut first_command_word = None;
+        for word in words.by_ref() {
+            let Some((name, value_word)) = assignment_word(word) else {
+                first_command_word = Some(word);
+                break;
+            };
+            let fields = expand_word(&value_word, &mut |source| self.capture(source))?;
+            assignments.push((name, fields.into_iter().next().unwrap_or_default()));
+        }
+
         let mut argv = Vec::new();
-        for word in &command.words {
+        for word in first_command_word.into_iter().chain(words) {
             let fields = expand_word(word, &mut |source| self.capture(source))?;
             argv.extend(expand_globs(word, fields));
-        }
-        let mut assignments = Vec::new();
-        while argv.first().is_some_and(|word| assignment(word).is_some()) {
-            let item = argv.remove(0);
-            let (name, value) = assignment(&item).unwrap();
-            assignments.push((name.into(), value.into()));
         }
         let redirects = command
             .redirects
@@ -500,14 +508,77 @@ fn builtin_cd(argv: &[String]) -> i32 {
     }
 }
 
-fn assignment(word: &str) -> Option<(&str, &str)> {
-    let (name, value) = word.split_once('=')?;
-    (!name.is_empty()
-        && name
-            .chars()
-            .enumerate()
-            .all(|(i, c)| c == '_' || c.is_ascii_alphanumeric() && (i > 0 || !c.is_ascii_digit())))
-    .then_some((name, value))
+fn assignment_word(word: &Word) -> Option<(String, Word)> {
+    let mut name = String::new();
+    for (part_index, part) in word.parts.iter().enumerate() {
+        if !part.split {
+            return None;
+        }
+        if let Some(equals) = part.text.find('=') {
+            name.push_str(&part.text[..equals]);
+            if !valid_assignment_name(&name) {
+                return None;
+            }
+            let mut parts = Vec::new();
+            parts.push(WordPart {
+                text: part.text[equals + 1..].into(),
+                expansion: part.expansion,
+                split: false,
+            });
+            parts.extend(
+                word.parts[part_index + 1..]
+                    .iter()
+                    .cloned()
+                    .map(|mut part| {
+                        part.split = false;
+                        part
+                    }),
+            );
+            return Some((name, Word { parts }));
+        }
+        name.push_str(&part.text);
+    }
+    None
+}
+
+fn valid_assignment_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().enumerate().all(|(index, character)| {
+            character == '_'
+                || character.is_ascii_alphabetic()
+                || index > 0 && character.is_ascii_digit()
+        })
+}
+
+struct EnvironmentGuard {
+    previous: Vec<(String, Option<OsString>)>,
+}
+
+impl EnvironmentGuard {
+    fn apply(assignments: &[(String, String)]) -> Self {
+        let previous = assignments
+            .iter()
+            .map(|(name, value)| {
+                let previous = env::var_os(name);
+                unsafe { env::set_var(name, value) };
+                (name.clone(), previous)
+            })
+            .collect();
+        Self { previous }
+    }
+}
+
+impl Drop for EnvironmentGuard {
+    fn drop(&mut self) {
+        for (name, value) in self.previous.iter().rev() {
+            unsafe {
+                match value {
+                    Some(value) => env::set_var(name, value),
+                    None => env::remove_var(name),
+                }
+            }
+        }
+    }
 }
 
 fn expand_globs(word: &Word, fields: Vec<String>) -> Vec<String> {
