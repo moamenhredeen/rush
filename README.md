@@ -145,7 +145,7 @@ The first implementation currently supports:
 - Interactive input with line editing and persistent history
 - `rush -c "command"` and UTF-8 script files
 - External commands, concurrent pipelines, and exit statuses
-- Single and double quotes, escapes, environment expansion, globbing, and `$(...)`
+- Single and double quotes, escapes, `$?`, environment expansion, globbing, and `$(...)`
 - Persistent standalone assignments and temporary `NAME=value command` environments
 - `&&`, `||`, `;`, and background execution with `&`
 - `<`, `>`, `>>`, `2>`, `2>>`, and `2>&1`

@@ -167,6 +167,7 @@ impl Shell {
     }
 
     fn expand_command(&mut self, command: &crate::ast::Command) -> Result<ExpandedCommand, String> {
+        let last_status = self.last_status;
         let mut words = command.words.iter();
         let mut assignments = Vec::new();
         let mut first_command_word = None;
@@ -175,13 +176,13 @@ impl Shell {
                 first_command_word = Some(word);
                 break;
             };
-            let fields = expand_word(&value_word, &mut |source| self.capture(source))?;
+            let fields = expand_word(&value_word, last_status, &mut |source| self.capture(source))?;
             assignments.push((name, fields.into_iter().next().unwrap_or_default()));
         }
 
         let mut argv = Vec::new();
         for word in first_command_word.into_iter().chain(words) {
-            let fields = expand_word(word, &mut |source| self.capture(source))?;
+            let fields = expand_word(word, last_status, &mut |source| self.capture(source))?;
             argv.extend(expand_globs(word, fields));
         }
         let redirects = command
@@ -191,7 +192,9 @@ impl Shell {
                 let target = if redirect.kind == RedirectKind::StderrToStdout {
                     String::new()
                 } else {
-                    let fields = expand_word(&redirect.target, &mut |source| self.capture(source))?;
+                    let fields = expand_word(&redirect.target, last_status, &mut |source| {
+                        self.capture(source)
+                    })?;
                     if fields.len() != 1 {
                         return Err("ambiguous redirect".into());
                     }

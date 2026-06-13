@@ -4,13 +4,14 @@ use crate::ast::Word;
 
 pub fn expand_word(
     word: &Word,
+    last_status: i32,
     substitute: &mut impl FnMut(&str) -> Result<String, String>,
 ) -> Result<Vec<String>, String> {
     let mut value = String::new();
     let mut split = false;
     for part in &word.parts {
         let expanded = if part.expansion {
-            expand_text(&part.text, substitute)?
+            expand_text(&part.text, last_status, substitute)?
         } else {
             part.text.clone()
         };
@@ -28,6 +29,7 @@ pub fn expand_word(
 
 fn expand_text(
     text: &str,
+    last_status: i32,
     substitute: &mut impl FnMut(&str) -> Result<String, String>,
 ) -> Result<String, String> {
     let chars: Vec<char> = text.chars().collect();
@@ -39,7 +41,10 @@ fn expand_text(
             index += 1;
             continue;
         }
-        if chars.get(index + 1) == Some(&'(') {
+        if chars.get(index + 1) == Some(&'?') {
+            output.push_str(&last_status.to_string());
+            index += 2;
+        } else if chars.get(index + 1) == Some(&'(') {
             let (source, next) = command_substitution(&chars, index + 2)?;
             output.push_str(substitute(&source)?.trim_end_matches(['\r', '\n']));
             index = next;
@@ -118,7 +123,20 @@ mod tests {
                 split: false,
             }],
         };
-        let expanded = expand_word(&word, &mut |_| Ok("world\n".into())).unwrap();
+        let expanded = expand_word(&word, 7, &mut |_| Ok("world\n".into())).unwrap();
         assert_eq!(expanded, ["hello-world"]);
+    }
+
+    #[test]
+    fn expands_last_status() {
+        let word = Word {
+            parts: vec![WordPart {
+                text: "status=$?".into(),
+                expansion: true,
+                split: false,
+            }],
+        };
+        let expanded = expand_word(&word, 23, &mut |_| unreachable!()).unwrap();
+        assert_eq!(expanded, ["status=23"]);
     }
 }

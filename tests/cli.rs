@@ -145,6 +145,71 @@ fn invalid_assignment_name_is_a_command() {
     assert_eq!(output.status.code(), Some(127));
 }
 
+#[test]
+fn expands_previous_exit_status() {
+    let rush_binary = env!("CARGO_BIN_EXE_rush");
+    let output = rush(&format!("\"{rush_binary}\" -c 'exit 7'; echo $?"));
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+}
+
+#[test]
+fn successful_command_updates_exit_status() {
+    let output = rush("rush-command-that-does-not-exist; echo ok; echo $? ");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n0\n");
+}
+
+#[test]
+fn pipeline_status_comes_from_last_command() {
+    let rush_binary = env!("CARGO_BIN_EXE_rush");
+    let source = format!(
+        "\"{rush_binary}\" -c 'exit 9' | echo ok; echo $?; echo ok | \"{rush_binary}\" -c 'exit 6'; echo $?"
+    );
+    let output = rush(&source);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n0\n6\n");
+}
+
+#[test]
+fn logical_operators_preserve_and_update_status() {
+    let rush_binary = env!("CARGO_BIN_EXE_rush");
+    let source = format!(
+        "\"{rush_binary}\" -c 'exit 4' && echo skipped; echo $?; \"{rush_binary}\" -c 'exit 5' || echo recovered; echo $?"
+    );
+    let output = rush(&source);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "4\nrecovered\n0\n");
+}
+
+#[test]
+fn background_launch_sets_success_status() {
+    let output = rush("rush-command-that-does-not-exist; cat & echo $? ");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n");
+}
+
+#[test]
+fn exit_status_expands_quoted_and_unquoted() {
+    let rush_binary = env!("CARGO_BIN_EXE_rush");
+    let source = format!("\"{rush_binary}\" -c 'exit 3'; echo $? \"status=$?\"");
+    let output = rush(&source);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3 status=3\n");
+}
+
+#[test]
+fn command_substitution_has_independent_exit_status() {
+    let output = rush(
+        "rush-command-that-does-not-exist; echo \"inner=$(rush-command-that-does-not-exist; echo $?)\"; echo \"outer=$?\"",
+    );
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "inner=127\nouter=0\n"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn forwards_sigint_to_foreground_pipeline() {
