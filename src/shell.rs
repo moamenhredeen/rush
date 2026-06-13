@@ -232,6 +232,7 @@ impl Shell {
         let name = command.argv.first()?;
         match name.as_str() {
             "cd" => Some(builtin_cd(&command.argv)),
+            "clear" => Some(builtin_clear()),
             "exit" => {
                 let status = command.argv.get(1).map(|value| value.parse()).transpose();
                 match status {
@@ -512,6 +513,18 @@ fn builtin_cd(argv: &[String]) -> i32 {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("rush: cd: {target}: {error}");
+            1
+        }
+    }
+}
+
+fn builtin_clear() -> i32 {
+    use std::io::Write;
+    let mut stdout = io::stdout();
+    match stdout.write_all(b"\x1b[2J\x1b[3J\x1b[H").and_then(|()| stdout.flush()) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("rush: clear: {error}");
             1
         }
     }
