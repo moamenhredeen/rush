@@ -31,10 +31,8 @@ impl RushCompleter {
         commands.dedup();
         Self { commands }
     }
-}
 
-impl Completer for RushCompleter {
-    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+    fn complete_in(&self, line: &str, pos: usize, cwd: &Path) -> Vec<Suggestion> {
         let pos = floor_char_boundary(line, pos.min(line.len()));
         let start = token_start(line, pos);
         let fragment = &line[start..pos];
@@ -45,20 +43,27 @@ impl Completer for RushCompleter {
                 .cloned()
                 .collect()
         } else {
-            path_completions(
-                fragment,
-                &env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            )
+            path_completions(fragment, cwd)
         };
         values
             .into_iter()
             .map(|value| Suggestion {
+                append_whitespace: !value.ends_with(std::path::MAIN_SEPARATOR),
                 value,
                 span: Span::new(start, pos),
-                append_whitespace: true,
                 ..Suggestion::default()
             })
             .collect()
+    }
+}
+
+impl Completer for RushCompleter {
+    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+        self.complete_in(
+            line,
+            pos,
+            &env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        )
     }
 }
 
@@ -227,6 +232,31 @@ mod tests {
                 format!("alpha-dir{}", std::path::MAIN_SEPARATOR),
                 "alpha\\ file".into()
             ]
+        );
+    }
+
+    #[test]
+    fn appends_spaces_only_to_completed_arguments() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("target-file"), "").unwrap();
+        fs::create_dir(directory.path().join("target-dir")).unwrap();
+        let completer = RushCompleter::with_commands(&["echo"]);
+        let command = completer.complete_in("ec", 2, directory.path());
+        let paths = completer.complete_in("cd targ", 7, directory.path());
+        assert!(command[0].append_whitespace);
+        assert!(
+            !paths
+                .iter()
+                .find(|suggestion| suggestion.value.ends_with(std::path::MAIN_SEPARATOR))
+                .unwrap()
+                .append_whitespace
+        );
+        assert!(
+            paths
+                .iter()
+                .find(|suggestion| suggestion.value == "target-file")
+                .unwrap()
+                .append_whitespace
         );
     }
 }

@@ -62,6 +62,7 @@ fn run_repl(shell: &mut Shell) -> i32 {
     );
     let completion_menu = ColumnarMenu::default().with_name("completion_menu");
     let editor = Reedline::create()
+        .with_quick_completions(true)
         .with_completer(Box::new(RushCompleter::new()))
         .with_highlighter(Box::new(RushHighlighter))
         .with_menu(ReedlineMenu::EngineCompleter(Box::new(completion_menu)))
