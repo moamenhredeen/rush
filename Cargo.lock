@@ -1478,6 +1478,7 @@ dependencies = [
  "ctrlc",
  "glob",
  "libc",
+ "nu-ansi-term",
  "os_pipe",
  "reedline",
  "tempfile",

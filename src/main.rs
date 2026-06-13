@@ -8,7 +8,7 @@ use reedline::{
     KeyModifiers, MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, Signal,
     default_emacs_keybindings,
 };
-use rush::{Shell, completion::RushCompleter};
+use rush::{Shell, completion::RushCompleter, highlighting::RushHighlighter};
 
 fn main() {
     let mut args = env::args_os().skip(1);
@@ -63,6 +63,7 @@ fn run_repl(shell: &mut Shell) -> i32 {
     let completion_menu = ColumnarMenu::default().with_name("completion_menu");
     let editor = Reedline::create()
         .with_completer(Box::new(RushCompleter::new()))
+        .with_highlighter(Box::new(RushHighlighter))
         .with_menu(ReedlineMenu::EngineCompleter(Box::new(completion_menu)))
         .with_edit_mode(Box::new(Emacs::new(keybindings)));
     let mut editor = match history {
