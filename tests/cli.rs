@@ -1,5 +1,7 @@
 use std::fs;
 use std::process::Command;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn rush(source: &str) -> std::process::Output {
@@ -60,4 +62,60 @@ fn executes_script_and_redirects_output() {
 fn returns_missing_command_status() {
     let output = rush("rush-command-that-does-not-exist");
     assert_eq!(output.status.code(), Some(127));
+}
+
+#[cfg(unix)]
+#[test]
+fn forwards_sigint_to_foreground_pipeline() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rush"))
+        .args(["-c", "sleep 10 | cat"])
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("rush did not interrupt its foreground pipeline");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    assert_eq!(status.code(), Some(130), "signal={:?}", status.signal());
+}
+
+#[cfg(unix)]
+#[test]
+fn forwards_sigint_to_foregrounded_job() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rush"))
+        .args(["-c", "sleep 10 & fg %1"])
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("rush did not interrupt the foregrounded job");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    assert_eq!(status.code(), Some(130), "signal={:?}", status.signal());
 }

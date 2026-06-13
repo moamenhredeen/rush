@@ -11,6 +11,7 @@ use os_pipe::{PipeReader, PipeWriter, pipe};
 use crate::ast::*;
 use crate::expand::expand_word;
 use crate::parser::parse;
+use crate::process_control::{ProcessGroup, install_interrupt_handler};
 
 pub struct Shell {
     last_status: i32,
@@ -24,6 +25,12 @@ struct Job {
     children: Vec<Child>,
     status: Option<i32>,
     announced: bool,
+    group: ProcessGroup,
+}
+
+struct SpawnedPipeline {
+    children: Vec<Child>,
+    group: ProcessGroup,
 }
 
 struct ExpandedCommand {
@@ -45,6 +52,7 @@ impl Default for Shell {
 
 impl Shell {
     pub fn new() -> Self {
+        install_interrupt_handler();
         Self {
             last_status: 0,
             exit_request: None,
@@ -123,10 +131,10 @@ impl Shell {
             return 2;
         }
         match spawn_pipeline(expanded, background) {
-            Ok(children) if background => {
+            Ok(pipeline) if background => {
                 let id = self.next_job;
                 self.next_job += 1;
-                let pids: Vec<_> = children.iter().map(Child::id).collect();
+                let pids: Vec<_> = pipeline.children.iter().map(Child::id).collect();
                 eprintln!(
                     "[{id}] {}",
                     pids.iter()
@@ -138,14 +146,15 @@ impl Shell {
                     id,
                     Job {
                         command: source.into(),
-                        children,
+                        children: pipeline.children,
                         status: None,
                         announced: false,
+                        group: pipeline.group,
                     },
                 );
                 0
             }
-            Ok(mut children) => wait_pipeline(&mut children),
+            Ok(mut pipeline) => wait_foreground(&mut pipeline),
             Err(error) => {
                 eprintln!("rush: {error}");
                 command_error_status(&error)
@@ -260,7 +269,7 @@ impl Shell {
             let mut status = 0;
             for child in &mut job.children {
                 match child.try_wait() {
-                    Ok(Some(exit)) => status = exit.code().unwrap_or(1),
+                    Ok(Some(exit)) => status = exit_status_code(exit),
                     Ok(None) => complete = false,
                     Err(_) => {
                         status = 1;
@@ -288,8 +297,10 @@ impl Shell {
             return 1;
         };
         println!("{}", job.command);
-        job.status
-            .unwrap_or_else(|| wait_pipeline(&mut job.children))
+        job.status.unwrap_or_else(|| {
+            let _active = job.group.activate();
+            wait_pipeline(&mut job.children)
+        })
     }
 
     pub fn shutdown_jobs(&mut self) {
@@ -303,9 +314,10 @@ impl Shell {
     }
 }
 
-fn spawn_pipeline(commands: Vec<ExpandedCommand>, background: bool) -> io::Result<Vec<Child>> {
+fn spawn_pipeline(commands: Vec<ExpandedCommand>, background: bool) -> io::Result<SpawnedPipeline> {
     let count = commands.len();
     let mut children = Vec::new();
+    let mut group = ProcessGroup::new();
     let mut previous_stdout: Option<PipeReader> = None;
     for (index, command) in commands.into_iter().enumerate() {
         if command.argv.is_empty() {
@@ -318,6 +330,7 @@ fn spawn_pipeline(commands: Vec<ExpandedCommand>, background: bool) -> io::Resul
         }
         process.args(&command.argv[1..]);
         process.envs(command.assignments);
+        group.configure(&mut process);
         let mut stdin = previous_stdout.take().map(Stdio::from);
         if stdin.is_none() && background {
             stdin = Some(Stdio::null());
@@ -336,10 +349,17 @@ fn spawn_pipeline(commands: Vec<ExpandedCommand>, background: bool) -> io::Resul
         }
         process.stdout(stdout.stdio()?);
         process.stderr(stderr.stdio()?);
-        children.push(process.spawn()?);
+        let child = process.spawn()?;
+        group.add_child(child.id());
+        children.push(child);
         previous_stdout = next_reader;
     }
-    Ok(children)
+    Ok(SpawnedPipeline { children, group })
+}
+
+fn wait_foreground(pipeline: &mut SpawnedPipeline) -> i32 {
+    let _active = pipeline.group.activate();
+    wait_pipeline(&mut pipeline.children)
 }
 
 enum OutputTarget {
@@ -406,7 +426,7 @@ fn wait_pipeline(children: &mut [Child]) -> i32 {
     let mut status = 1;
     for (index, child) in children.iter_mut().enumerate() {
         match child.wait() {
-            Ok(exit) if index == last => status = exit.code().unwrap_or(1),
+            Ok(exit) if index == last => status = exit_status_code(exit),
             Err(error) => {
                 eprintln!("rush: failed waiting for process: {error}");
                 status = 1;
@@ -415,6 +435,20 @@ fn wait_pipeline(children: &mut [Child]) -> i32 {
         }
     }
     status
+}
+
+fn exit_status_code(status: std::process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+    1
 }
 
 fn builtin_cd(argv: &[String]) -> i32 {

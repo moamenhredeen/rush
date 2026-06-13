@@ -1475,7 +1475,9 @@ checksum = "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
 name = "rush"
 version = "0.1.0"
 dependencies = [
+ "ctrlc",
  "glob",
+ "libc",
  "os_pipe",
  "reedline",
  "uu_cat",
@@ -1491,6 +1493,7 @@ dependencies = [
  "uu_uniq",
  "uu_wc",
  "uucore",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
