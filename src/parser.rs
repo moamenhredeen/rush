@@ -1,18 +1,23 @@
 use crate::ast::*;
-use crate::lexer::{Token, lex};
+use crate::lexer::{SpannedToken, Token, lex_spanned};
 
 pub fn parse(source: &str) -> Result<Program, String> {
-    let tokens = lex(source)?;
-    let mut parser = Parser { tokens, index: 0 };
+    let tokens = lex_spanned(source)?;
+    let mut parser = Parser {
+        source,
+        tokens,
+        index: 0,
+    };
     parser.program()
 }
 
-struct Parser {
-    tokens: Vec<Token>,
+struct Parser<'a> {
+    source: &'a str,
+    tokens: Vec<SpannedToken>,
     index: usize,
 }
 
-impl Parser {
+impl Parser<'_> {
     fn program(&mut self) -> Result<Program, String> {
         let mut entries = Vec::new();
         while self.index < self.tokens.len() {
@@ -20,7 +25,12 @@ impl Parser {
             if self.index == self.tokens.len() {
                 break;
             }
+            let source_start = self.tokens[self.index].span.start;
             let pipeline = self.pipeline()?;
+            let source_end = self
+                .tokens
+                .get(self.index)
+                .map_or(self.source.len(), |token| token.span.start);
             let background = self.take(|t| matches!(t, Token::Background));
             let connector = if background || self.take(|t| matches!(t, Token::Semi)) {
                 Some(Connector::Sequence)
@@ -33,6 +43,7 @@ impl Parser {
             };
             entries.push(Entry {
                 pipeline,
+                source: self.source[source_start..source_end].trim().into(),
                 connector,
                 background,
             });
@@ -55,7 +66,12 @@ impl Parser {
         let mut words = Vec::new();
         let mut redirects = Vec::new();
         loop {
-            match self.tokens.get(self.index).cloned() {
+            match self
+                .tokens
+                .get(self.index)
+                .cloned()
+                .map(|token| token.token)
+            {
                 Some(Token::Word(word)) => {
                     words.push(word);
                     self.index += 1;
@@ -69,7 +85,12 @@ impl Parser {
                             target: Word { parts: Vec::new() },
                         });
                     } else {
-                        let Some(Token::Word(target)) = self.tokens.get(self.index).cloned() else {
+                        let Some(Token::Word(target)) = self
+                            .tokens
+                            .get(self.index)
+                            .cloned()
+                            .map(|token| token.token)
+                        else {
                             return Err("redirection requires a target".into());
                         };
                         self.index += 1;
@@ -86,7 +107,11 @@ impl Parser {
     }
 
     fn take(&mut self, predicate: impl FnOnce(&Token) -> bool) -> bool {
-        if self.tokens.get(self.index).is_some_and(predicate) {
+        if self
+            .tokens
+            .get(self.index)
+            .is_some_and(|token| predicate(&token.token))
+        {
             self.index += 1;
             true
         } else {
@@ -117,10 +142,19 @@ mod tests {
         assert_eq!(program.entries.len(), 2);
         assert_eq!(program.entries[0].pipeline.commands.len(), 2);
         assert!(program.entries[0].background);
+        assert_eq!(program.entries[0].source, "echo hi | wc -c");
+        assert_eq!(program.entries[1].source, "echo done");
     }
 
     #[test]
     fn rejects_missing_redirect_target() {
         assert!(parse("echo hi >").is_err());
+    }
+
+    #[test]
+    fn preserves_original_pipeline_source() {
+        let program = parse("echo \"a & b\" | wc -c & jobs").unwrap();
+        assert_eq!(program.entries[0].source, "echo \"a & b\" | wc -c");
+        assert_eq!(program.entries[1].source, "jobs");
     }
 }

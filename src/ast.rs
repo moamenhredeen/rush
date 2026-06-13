@@ -6,6 +6,7 @@ pub struct Program {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub pipeline: Pipeline,
+    pub source: String,
     pub connector: Option<Connector>,
     pub background: bool,
 }

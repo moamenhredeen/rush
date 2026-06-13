@@ -23,6 +23,7 @@ pub struct Shell {
 struct Job {
     command: String,
     children: Vec<Child>,
+    child_statuses: Vec<Option<i32>>,
     status: Option<i32>,
     announced: bool,
     group: ProcessGroup,
@@ -87,7 +88,7 @@ impl Shell {
             };
             if should_run {
                 self.last_status =
-                    self.execute_pipeline(entry.pipeline, entry.background, source.trim());
+                    self.execute_pipeline(entry.pipeline, entry.background, &entry.source);
                 if self.exit_request.is_some() {
                     break;
                 }
@@ -146,6 +147,7 @@ impl Shell {
                     id,
                     Job {
                         command: source.into(),
+                        child_statuses: vec![None; pipeline.children.len()],
                         children: pipeline.children,
                         status: None,
                         announced: false,
@@ -240,7 +242,7 @@ impl Shell {
         self.poll_jobs();
         for (id, job) in &mut self.jobs {
             if job.status.is_some() && !job.announced {
-                eprintln!("[{id}] Done\t{}", job.command);
+                eprintln!("[{id}] {}\t{}", job.state(), job.command);
                 job.announced = true;
             }
         }
@@ -251,12 +253,7 @@ impl Shell {
     fn print_jobs(&mut self) {
         self.poll_jobs();
         for (id, job) in &self.jobs {
-            let state = if job.status.is_some() {
-                "Done"
-            } else {
-                "Running"
-            };
-            println!("[{id}] {state}\t{}", job.command);
+            println!("[{id}] {}\t{}", job.state(), job.command);
         }
     }
 
@@ -265,19 +262,18 @@ impl Shell {
             if job.status.is_some() {
                 continue;
             }
-            let mut complete = true;
-            let mut status = 0;
-            for child in &mut job.children {
+            for (index, child) in job.children.iter_mut().enumerate() {
+                if job.child_statuses[index].is_some() {
+                    continue;
+                }
                 match child.try_wait() {
-                    Ok(Some(exit)) => status = exit_status_code(exit),
-                    Ok(None) => complete = false,
-                    Err(_) => {
-                        status = 1;
-                    }
+                    Ok(Some(exit)) => job.child_statuses[index] = Some(exit_status_code(exit)),
+                    Ok(None) => {}
+                    Err(_) => job.child_statuses[index] = Some(1),
                 }
             }
-            if complete {
-                job.status = Some(status);
+            if job.child_statuses.iter().all(Option::is_some) {
+                job.status = job.child_statuses.last().copied().flatten();
             }
         }
     }
@@ -297,10 +293,7 @@ impl Shell {
             return 1;
         };
         println!("{}", job.command);
-        job.status.unwrap_or_else(|| {
-            let _active = job.group.activate();
-            wait_pipeline(&mut job.children)
-        })
+        job.wait()
     }
 
     pub fn shutdown_jobs(&mut self) {
@@ -311,6 +304,39 @@ impl Shell {
             }
         }
         self.jobs.clear();
+    }
+}
+
+impl Job {
+    fn state(&self) -> String {
+        job_state(self.status)
+    }
+
+    fn wait(&mut self) -> i32 {
+        if let Some(status) = self.status {
+            return status;
+        }
+        let _active = self.group.activate();
+        for (index, child) in self.children.iter_mut().enumerate() {
+            if self.child_statuses[index].is_none() {
+                self.child_statuses[index] = Some(match child.wait() {
+                    Ok(status) => exit_status_code(status),
+                    Err(error) => {
+                        eprintln!("rush: failed waiting for process: {error}");
+                        1
+                    }
+                });
+            }
+        }
+        self.child_statuses.last().copied().flatten().unwrap_or(1)
+    }
+}
+
+fn job_state(status: Option<i32>) -> String {
+    match status {
+        None => "Running".into(),
+        Some(0) => "Done".into(),
+        Some(status) => format!("Failed ({status})"),
     }
 }
 
@@ -547,5 +573,18 @@ fn command_error_status(error: &io::Error) -> i32 {
         io::ErrorKind::NotFound => 127,
         io::ErrorKind::PermissionDenied => 126,
         _ => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::job_state;
+
+    #[test]
+    fn formats_job_states() {
+        assert_eq!(job_state(None), "Running");
+        assert_eq!(job_state(Some(0)), "Done");
+        assert_eq!(job_state(Some(7)), "Failed (7)");
+        assert_eq!(job_state(Some(130)), "Failed (130)");
     }
 }

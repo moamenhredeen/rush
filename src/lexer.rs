@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::ast::{Word, WordPart};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,15 +18,39 @@ pub enum Token {
     ErrorToOutput,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpannedToken {
+    pub token: Token,
+    pub span: Range<usize>,
+}
+
+#[cfg(test)]
 pub fn lex(source: &str) -> Result<Vec<Token>, String> {
+    Ok(lex_spanned(source)?
+        .into_iter()
+        .map(|token| token.token)
+        .collect())
+}
+
+pub fn lex_spanned(source: &str) -> Result<Vec<SpannedToken>, String> {
     let chars: Vec<char> = source.chars().collect();
+    let mut byte_offsets: Vec<_> = source.char_indices().map(|(index, _)| index).collect();
+    byte_offsets.push(source.len());
     let mut tokens = Vec::new();
     let mut index = 0;
 
     while index < chars.len() {
         if chars[index].is_whitespace() {
-            if chars[index] == '\n' && !matches!(tokens.last(), Some(Token::Semi)) {
-                tokens.push(Token::Semi);
+            if chars[index] == '\n'
+                && !matches!(
+                    tokens.last(),
+                    Some(SpannedToken {
+                        token: Token::Semi,
+                        ..
+                    })
+                )
+            {
+                tokens.push(spanned(Token::Semi, index, index + 1, &byte_offsets));
             }
             index += 1;
             continue;
@@ -36,20 +62,34 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
             continue;
         }
         if let Some((token, consumed)) = operator(&chars[index..]) {
-            tokens.push(token);
+            tokens.push(spanned(token, index, index + consumed, &byte_offsets));
             index += consumed;
             continue;
         }
 
+        let start = index;
         let (word, next) = word(&chars, index)?;
-        tokens.push(Token::Word(word));
+        tokens.push(spanned(Token::Word(word), start, next, &byte_offsets));
         index = next;
     }
 
-    while matches!(tokens.last(), Some(Token::Semi)) {
+    while matches!(
+        tokens.last(),
+        Some(SpannedToken {
+            token: Token::Semi,
+            ..
+        })
+    ) {
         tokens.pop();
     }
     Ok(tokens)
+}
+
+fn spanned(token: Token, start: usize, end: usize, offsets: &[usize]) -> SpannedToken {
+    SpannedToken {
+        token,
+        span: offsets[start]..offsets[end],
+    }
 }
 
 fn operator(chars: &[char]) -> Option<(Token, usize)> {

@@ -166,8 +166,9 @@ target/debug/rush
 ```
 
 Background jobs use a portable subset of traditional shell job control. `&`,
-`jobs`, and `fg` are available, but stopped jobs, `bg`, Ctrl-Z suspension, and
-interactive terminal handoff are not implemented yet.
+`jobs`, and `fg` are available. Jobs retain their individual pipeline labels
+and report running, successful, or failed status. Stopped jobs, `bg`, Ctrl-Z
+suspension, and interactive terminal handoff are not implemented yet.
 
 ## Vision
 

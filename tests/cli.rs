@@ -64,6 +64,26 @@ fn returns_missing_command_status() {
     assert_eq!(output.status.code(), Some(127));
 }
 
+#[test]
+fn jobs_show_each_pipeline_label() {
+    let output = rush("cat & echo ready & jobs");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\tcat\n"), "{stdout}");
+    assert!(stdout.contains("\techo ready\n"), "{stdout}");
+    assert!(!stdout.contains("cat & echo ready & jobs"), "{stdout}");
+}
+
+#[test]
+fn fg_returns_completed_job_failure_status() {
+    let output = rush("cat /rush-file-that-does-not-exist & fg %1");
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "cat /rush-file-that-does-not-exist\n"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn forwards_sigint_to_foreground_pipeline() {
