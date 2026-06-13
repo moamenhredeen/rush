@@ -10,6 +10,7 @@ use glob::glob;
 use os_pipe::{PipeReader, PipeWriter, pipe};
 
 use crate::ast::*;
+use crate::commands::{BUILTINS, BUNDLED};
 use crate::expand::expand_word;
 use crate::parser::parse;
 use crate::process_control::{ProcessGroup, install_interrupt_handler};
@@ -616,13 +617,10 @@ fn expand_globs(word: &Word, fields: Vec<String>) -> Vec<String> {
 }
 
 fn is_stateful_builtin(name: &str) -> bool {
-    matches!(name, "cd" | "exit" | "jobs" | "fg")
+    BUILTINS.contains(&name)
 }
 
 fn command_program(name: &str) -> io::Result<(std::path::PathBuf, bool)> {
-    const BUNDLED: &[&str] = &[
-        "cat", "cp", "echo", "ls", "mkdir", "mv", "pwd", "rm", "sort", "touch", "uniq", "wc",
-    ];
     let is_explicit = Path::new(name).is_absolute()
         || name.contains(std::path::MAIN_SEPARATOR)
         || (cfg!(windows) && name.contains('/'));

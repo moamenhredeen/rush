@@ -1,4 +1,6 @@
 mod ast;
+mod commands;
+pub mod completion;
 mod diagnostic;
 mod expand;
 mod lexer;

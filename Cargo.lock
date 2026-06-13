@@ -1480,6 +1480,7 @@ dependencies = [
  "libc",
  "os_pipe",
  "reedline",
+ "tempfile",
  "uu_cat",
  "uu_cp",
  "uu_echo",

@@ -3,8 +3,12 @@ use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 
-use reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory, Reedline, Signal};
-use rush::Shell;
+use reedline::{
+    ColumnarMenu, DefaultPrompt, DefaultPromptSegment, Emacs, FileBackedHistory, KeyCode,
+    KeyModifiers, MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, Signal,
+    default_emacs_keybindings,
+};
+use rush::{Shell, completion::RushCompleter};
 
 fn main() {
     let mut args = env::args_os().skip(1);
@@ -47,9 +51,24 @@ fn run_repl(shell: &mut Shell) -> i32 {
     let history = history_path()
         .and_then(|path| FileBackedHistory::with_file(1_000, path).ok())
         .map(Box::new);
-    let mut editor = history
-        .map(|history| Reedline::create().with_history(history))
-        .unwrap_or_else(Reedline::create);
+    let mut keybindings = default_emacs_keybindings();
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::Tab,
+        ReedlineEvent::UntilFound(vec![
+            ReedlineEvent::Menu("completion_menu".into()),
+            ReedlineEvent::MenuNext,
+        ]),
+    );
+    let completion_menu = ColumnarMenu::default().with_name("completion_menu");
+    let editor = Reedline::create()
+        .with_completer(Box::new(RushCompleter::new()))
+        .with_menu(ReedlineMenu::EngineCompleter(Box::new(completion_menu)))
+        .with_edit_mode(Box::new(Emacs::new(keybindings)));
+    let mut editor = match history {
+        Some(history) => editor.with_history(history),
+        None => editor,
+    };
     let prompt = DefaultPrompt::new(
         DefaultPromptSegment::Basic("rush".into()),
         DefaultPromptSegment::Empty,
