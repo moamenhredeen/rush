@@ -151,6 +151,7 @@ The first implementation currently supports:
 - `<`, `>`, `>>`, `2>`, `2>>`, and `2>&1`
 - Stateful `cd`, `exit`, `jobs`, and `fg` built-ins
 - Process-group-based Ctrl-C forwarding for foreground pipelines and `fg`
+- Source-located syntax diagnostics for command strings and script files
 - A bundled uutils-based command set through the `rush-utils` companion binary
 
 The bundled command set is currently:

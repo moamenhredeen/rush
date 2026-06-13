@@ -1,4 +1,5 @@
 mod ast;
+mod diagnostic;
 mod expand;
 mod lexer;
 mod parser;

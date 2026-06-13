@@ -71,10 +71,15 @@ impl Shell {
     }
 
     pub fn run_source(&mut self, source: &str) -> i32 {
+        self.run_source_named(source, "-c")
+    }
+
+    pub fn run_source_named(&mut self, source: &str, source_name: &str) -> i32 {
         let program = match parse(source) {
             Ok(program) => program,
             Err(error) => {
-                eprintln!("rush: syntax error: {error}");
+                let (line, column) = error.location(source);
+                eprintln!("rush: {source_name}:{line}:{column}: {}", error.message);
                 self.last_status = 2;
                 return 2;
             }

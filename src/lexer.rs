@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use crate::ast::{Word, WordPart};
+use crate::diagnostic::Diagnostic;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Token {
@@ -25,14 +26,14 @@ pub struct SpannedToken {
 }
 
 #[cfg(test)]
-pub fn lex(source: &str) -> Result<Vec<Token>, String> {
+pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
     Ok(lex_spanned(source)?
         .into_iter()
         .map(|token| token.token)
         .collect())
 }
 
-pub fn lex_spanned(source: &str) -> Result<Vec<SpannedToken>, String> {
+pub fn lex_spanned(source: &str) -> Result<Vec<SpannedToken>, Diagnostic> {
     let chars: Vec<char> = source.chars().collect();
     let mut byte_offsets: Vec<_> = source.char_indices().map(|(index, _)| index).collect();
     byte_offsets.push(source.len());
@@ -68,7 +69,7 @@ pub fn lex_spanned(source: &str) -> Result<Vec<SpannedToken>, String> {
         }
 
         let start = index;
-        let (word, next) = word(&chars, index)?;
+        let (word, next) = word(&chars, &byte_offsets, index)?;
         tokens.push(spanned(Token::Word(word), start, next, &byte_offsets));
         index = next;
     }
@@ -114,7 +115,7 @@ fn operator(chars: &[char]) -> Option<(Token, usize)> {
     None
 }
 
-fn word(chars: &[char], mut index: usize) -> Result<(Word, usize), String> {
+fn word(chars: &[char], offsets: &[usize], mut index: usize) -> Result<(Word, usize), Diagnostic> {
     let mut parts = Vec::new();
     let mut plain = String::new();
 
@@ -123,7 +124,7 @@ fn word(chars: &[char], mut index: usize) -> Result<(Word, usize), String> {
             break;
         }
         if chars[index] == '$' && chars.get(index + 1) == Some(&'(') {
-            let end = substitution_end(chars, index + 2)?;
+            let end = substitution_end(chars, offsets, index, index + 2)?;
             plain.extend(chars[index..end].iter());
             index = end;
             continue;
@@ -131,13 +132,17 @@ fn word(chars: &[char], mut index: usize) -> Result<(Word, usize), String> {
         match chars[index] {
             '\'' => {
                 push_plain(&mut parts, &mut plain, false);
+                let quote_start = index;
                 index += 1;
                 let start = index;
                 while index < chars.len() && chars[index] != '\'' {
                     index += 1;
                 }
                 if index == chars.len() {
-                    return Err("unterminated single quote".into());
+                    return Err(Diagnostic::new(
+                        offsets[quote_start],
+                        "unterminated single quote",
+                    ));
                 }
                 parts.push(WordPart {
                     text: chars[start..index].iter().collect(),
@@ -148,11 +153,12 @@ fn word(chars: &[char], mut index: usize) -> Result<(Word, usize), String> {
             }
             '"' => {
                 push_plain(&mut parts, &mut plain, false);
+                let quote_start = index;
                 index += 1;
                 let mut quoted = String::new();
                 while index < chars.len() && chars[index] != '"' {
                     if chars[index] == '$' && chars.get(index + 1) == Some(&'(') {
-                        let end = substitution_end(chars, index + 2)?;
+                        let end = substitution_end(chars, offsets, index, index + 2)?;
                         quoted.extend(chars[index..end].iter());
                         index = end;
                         continue;
@@ -171,7 +177,10 @@ fn word(chars: &[char], mut index: usize) -> Result<(Word, usize), String> {
                     index += 1;
                 }
                 if index == chars.len() {
-                    return Err("unterminated double quote".into());
+                    return Err(Diagnostic::new(
+                        offsets[quote_start],
+                        "unterminated double quote",
+                    ));
                 }
                 parts.push(WordPart {
                     text: quoted,
@@ -181,9 +190,10 @@ fn word(chars: &[char], mut index: usize) -> Result<(Word, usize), String> {
                 index += 1;
             }
             '\\' => {
+                let escape_start = index;
                 index += 1;
                 if index == chars.len() {
-                    return Err("trailing escape".into());
+                    return Err(Diagnostic::new(offsets[escape_start], "trailing escape"));
                 }
                 let escaped = chars[index];
                 if !escaped.is_whitespace()
@@ -212,7 +222,12 @@ fn word(chars: &[char], mut index: usize) -> Result<(Word, usize), String> {
     Ok((Word { parts }, index))
 }
 
-fn substitution_end(chars: &[char], mut index: usize) -> Result<usize, String> {
+fn substitution_end(
+    chars: &[char],
+    offsets: &[usize],
+    start: usize,
+    mut index: usize,
+) -> Result<usize, Diagnostic> {
     let mut depth = 1;
     let mut quote = None;
     while index < chars.len() {
@@ -238,7 +253,10 @@ fn substitution_end(chars: &[char], mut index: usize) -> Result<usize, String> {
         }
         index += 1;
     }
-    Err("unterminated command substitution".into())
+    Err(Diagnostic::new(
+        offsets[start],
+        "unterminated command substitution",
+    ))
 }
 
 fn push_plain(parts: &mut Vec<WordPart>, plain: &mut String, allow_empty: bool) {

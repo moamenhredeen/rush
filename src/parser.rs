@@ -1,7 +1,8 @@
 use crate::ast::*;
+use crate::diagnostic::Diagnostic;
 use crate::lexer::{SpannedToken, Token, lex_spanned};
 
-pub fn parse(source: &str) -> Result<Program, String> {
+pub fn parse(source: &str) -> Result<Program, Diagnostic> {
     let tokens = lex_spanned(source)?;
     let mut parser = Parser {
         source,
@@ -18,7 +19,7 @@ struct Parser<'a> {
 }
 
 impl Parser<'_> {
-    fn program(&mut self) -> Result<Program, String> {
+    fn program(&mut self) -> Result<Program, Diagnostic> {
         let mut entries = Vec::new();
         while self.index < self.tokens.len() {
             while self.take(|t| matches!(t, Token::Semi)) {}
@@ -32,6 +33,7 @@ impl Parser<'_> {
                 .get(self.index)
                 .map_or(self.source.len(), |token| token.span.start);
             let background = self.take(|t| matches!(t, Token::Background));
+            let connector_token = self.tokens.get(self.index).cloned();
             let connector = if background || self.take(|t| matches!(t, Token::Semi)) {
                 Some(Connector::Sequence)
             } else if self.take(|t| matches!(t, Token::And)) {
@@ -48,21 +50,46 @@ impl Parser<'_> {
                 background,
             });
             if connector.is_none() && self.index < self.tokens.len() {
-                return Err("expected a command separator".into());
+                let token = &self.tokens[self.index];
+                return Err(Diagnostic::new(
+                    token.span.start,
+                    format!("unexpected operator `{}`", token_label(&token.token)),
+                ));
+            }
+            if matches!(connector, Some(Connector::And | Connector::Or))
+                && self.index == self.tokens.len()
+            {
+                let token = connector_token.expect("connector token exists");
+                return Err(Diagnostic::new(
+                    token.span.start,
+                    format!("expected command after `{}`", token_label(&token.token)),
+                ));
             }
         }
         Ok(Program { entries })
     }
 
-    fn pipeline(&mut self) -> Result<Pipeline, String> {
+    fn pipeline(&mut self) -> Result<Pipeline, Diagnostic> {
         let mut commands = vec![self.command()?];
-        while self.take(|t| matches!(t, Token::Pipe)) {
-            commands.push(self.command()?);
+        while let Some(pipe) = self.take_token(|t| matches!(t, Token::Pipe)) {
+            match self.command() {
+                Ok(command) => commands.push(command),
+                Err(error)
+                    if error.message == "expected a command"
+                        || error.message.starts_with("unexpected operator") =>
+                {
+                    return Err(Diagnostic::new(
+                        pipe.span.start,
+                        "expected command after `|`",
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
         }
         Ok(Pipeline { commands })
     }
 
-    fn command(&mut self) -> Result<Command, String> {
+    fn command(&mut self) -> Result<Command, Diagnostic> {
         let mut words = Vec::new();
         let mut redirects = Vec::new();
         loop {
@@ -78,6 +105,7 @@ impl Parser<'_> {
                 }
                 Some(token) if redirect_kind(&token).is_some() => {
                     let kind = redirect_kind(&token).unwrap();
+                    let redirect = self.tokens[self.index].clone();
                     self.index += 1;
                     if kind == RedirectKind::StderrToStdout {
                         redirects.push(Redirect {
@@ -91,7 +119,10 @@ impl Parser<'_> {
                             .cloned()
                             .map(|token| token.token)
                         else {
-                            return Err("redirection requires a target".into());
+                            return Err(Diagnostic::new(
+                                redirect.span.start,
+                                format!("expected path after `{}`", token_label(&redirect.token)),
+                            ));
                         };
                         self.index += 1;
                         redirects.push(Redirect { kind, target });
@@ -101,7 +132,13 @@ impl Parser<'_> {
             }
         }
         if words.is_empty() {
-            return Err("expected a command".into());
+            if let Some(token) = self.tokens.get(self.index) {
+                return Err(Diagnostic::new(
+                    token.span.start,
+                    format!("unexpected operator `{}`", token_label(&token.token)),
+                ));
+            }
+            return Err(Diagnostic::new(self.source.len(), "expected a command"));
         }
         Ok(Command { words, redirects })
     }
@@ -118,6 +155,15 @@ impl Parser<'_> {
             false
         }
     }
+
+    fn take_token(&mut self, predicate: impl FnOnce(&Token) -> bool) -> Option<SpannedToken> {
+        let token = self.tokens.get(self.index)?;
+        if !predicate(&token.token) {
+            return None;
+        }
+        self.index += 1;
+        Some(token.clone())
+    }
 }
 
 fn redirect_kind(token: &Token) -> Option<RedirectKind> {
@@ -130,6 +176,23 @@ fn redirect_kind(token: &Token) -> Option<RedirectKind> {
         Token::ErrorToOutput => RedirectKind::StderrToStdout,
         _ => return None,
     })
+}
+
+fn token_label(token: &Token) -> &'static str {
+    match token {
+        Token::Word(_) => "word",
+        Token::Pipe => "|",
+        Token::And => "&&",
+        Token::Or => "||",
+        Token::Semi => ";",
+        Token::Background => "&",
+        Token::Input => "<",
+        Token::Output => ">",
+        Token::Append => ">>",
+        Token::ErrorOutput => "2>",
+        Token::ErrorAppend => "2>>",
+        Token::ErrorToOutput => "2>&1",
+    }
 }
 
 #[cfg(test)]

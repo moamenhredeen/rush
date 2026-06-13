@@ -12,7 +12,7 @@ fn main() {
 
     let status = match args.next() {
         Some(arg) if arg == "-c" => match args.next() {
-            Some(source) => shell.run_source(&source.to_string_lossy()),
+            Some(source) => shell.run_source_named(&source.to_string_lossy(), "-c"),
             None => {
                 eprintln!("rush: -c requires a command string");
                 2
@@ -21,7 +21,7 @@ fn main() {
         Some(path) => run_script(&mut shell, PathBuf::from(path)),
         None if io::stdin().is_terminal() => run_repl(&mut shell),
         None => match io::read_to_string(io::stdin()) {
-            Ok(source) => shell.run_source(&source),
+            Ok(source) => shell.run_source_named(&source, "<stdin>"),
             Err(error) => {
                 eprintln!("rush: failed to read stdin: {error}");
                 1
@@ -35,7 +35,7 @@ fn main() {
 
 fn run_script(shell: &mut Shell, path: PathBuf) -> i32 {
     match fs::read_to_string(&path) {
-        Ok(source) => shell.run_source(&source),
+        Ok(source) => shell.run_source_named(&source, &path.to_string_lossy()),
         Err(error) => {
             eprintln!("rush: {}: {error}", path.display());
             1
@@ -59,7 +59,7 @@ fn run_repl(shell: &mut Shell) -> i32 {
         shell.report_jobs();
         match editor.read_line(&prompt) {
             Ok(Signal::Success(line)) => {
-                shell.run_source(&line);
+                shell.run_source_named(&line, "<interactive>");
                 if let Some(status) = shell.take_exit_request() {
                     return status;
                 }

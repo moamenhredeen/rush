@@ -210,6 +210,92 @@ fn command_substitution_has_independent_exit_status() {
     );
 }
 
+#[test]
+fn reports_trailing_pipe_location() {
+    let output = rush("echo hi |");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "rush: -c:1:9: expected command after `|`\n"
+    );
+}
+
+#[test]
+fn reports_missing_redirect_target_location() {
+    let output = rush("echo hi >");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "rush: -c:1:9: expected path after `>`\n"
+    );
+}
+
+#[test]
+fn reports_unterminated_quote_location() {
+    let output = rush("echo \"hello");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "rush: -c:1:6: unterminated double quote\n"
+    );
+}
+
+#[test]
+fn reports_unexpected_operator_location() {
+    let output = rush("&& echo no");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "rush: -c:1:1: unexpected operator `&&`\n"
+    );
+}
+
+#[test]
+fn reports_unterminated_substitution_location() {
+    let output = rush("echo $(echo hi");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "rush: -c:1:6: unterminated command substitution\n"
+    );
+}
+
+#[test]
+fn reports_trailing_logical_operator_location() {
+    let output = rush("echo ok &&");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "rush: -c:1:9: expected command after `&&`\n"
+    );
+}
+
+#[test]
+fn reports_multiline_script_location_and_path() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!("rush-diagnostic-{unique}"));
+    fs::create_dir(&directory).unwrap();
+    let script = directory.join("broken.rush");
+    fs::write(&script, "echo one\necho two\necho hi |\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rush"))
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "rush: {}:3:9: expected command after `|`\n",
+            script.display()
+        )
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn forwards_sigint_to_foreground_pipeline() {
